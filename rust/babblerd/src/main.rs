@@ -75,7 +75,7 @@ async fn inner_main() -> color_eyre::Result<()> {
                     sock = public_socket.accept() => {
                         let sock = sock?.0;
                         tracing::info!("starting babeld");
-                        let (br_send, br_recv) = broadcast::channel(32);
+                        let (br_send, br_recv) = broadcast::channel(1024);
                         let (mp_send, mp_recv) = mpsc::channel(32);
                         let babel = tokio::spawn(babblerd::babel::babel(mp_recv, br_send));
                         let watcher = tokio::spawn(babblerd::if_watcher::watch(mp_send));
