@@ -18,6 +18,7 @@ from exo.shared.constants import EXO_CONFIG_FILE, EXO_MODELS_DIR
 from exo.shared.types.memory import Memory
 from exo.shared.types.profiling import (
     DiskUsage,
+    GpuInfo,
     MemoryUsage,
     NetworkInterfaceInfo,
     ThunderboltBridgeStatus,
@@ -334,6 +335,66 @@ class NodeDiskUsage(TaggedModel):
         )
 
 
+IS_LINUX = sys.platform == "linux"
+
+
+def _parse_nvidia_int(value: str, default: int = 0) -> int:
+    """Parse an integer from nvidia-smi output, returning default for N/A values."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _parse_nvidia_float(value: str, default: float = 0.0) -> float:
+    """Parse a float from nvidia-smi output, returning default for N/A values."""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+class NvidiaGpuMetrics(TaggedModel):
+    """GPU metrics gathered from nvidia-smi on Linux."""
+
+    gpus: list[GpuInfo]
+
+    @classmethod
+    async def gather(cls) -> Self | None:
+        if not IS_LINUX:
+            return None
+        try:
+            proc = await anyio.run_process(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=name,memory.total,memory.free,utilization.gpu,temperature.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                check=False,
+            )
+            if proc.returncode != 0:
+                return None
+            output = proc.stdout.decode("utf-8").strip()
+            if not output:
+                return None
+            gpus: list[GpuInfo] = []
+            for line in output.split("\n"):
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 5:
+                    gpus.append(
+                        GpuInfo(
+                            name=parts[0],
+                            memory_total=Memory.from_mb(_parse_nvidia_int(parts[1])),
+                            memory_available=Memory.from_mb(_parse_nvidia_int(parts[2])),
+                            gpu_utilization=_parse_nvidia_float(parts[3]),
+                            temperature=_parse_nvidia_float(parts[4]),
+                        )
+                    )
+            return cls(gpus=gpus) if gpus else None
+        except (FileNotFoundError, OSError):
+            return None
+
+
 async def _gather_iface_map() -> dict[str, str] | None:
     proc = await anyio.run_process(
         ["networksetup", "-listallhardwareports"], check=False
@@ -366,6 +427,7 @@ GatheredInfo = (
     | MiscData
     | StaticNodeInformation
     | NodeDiskUsage
+    | NvidiaGpuMetrics
 )
 
 
@@ -381,6 +443,7 @@ class InfoGatherer:
     static_info_poll_interval: float | None = 60
     rdma_ctl_poll_interval: float | None = 10 if IS_DARWIN else None
     disk_poll_interval: float | None = 30
+    nvidia_gpu_poll_interval: float | None = 5 if IS_LINUX else None
     _tg: TaskGroup = field(init=False, default_factory=TaskGroup)
 
     async def run(self):
@@ -397,6 +460,8 @@ class InfoGatherer:
                 tg.start_soon(self._monitor_system_profiler_thunderbolt_data)
                 tg.start_soon(self._monitor_thunderbolt_bridge_status)
                 tg.start_soon(self._monitor_rdma_ctl_status)
+            if IS_LINUX:
+                tg.start_soon(self._monitor_nvidia_gpu)
             tg.start_soon(self._watch_system_info)
             tg.start_soon(self._monitor_memory_usage)
             tg.start_soon(self._monitor_misc)
@@ -561,3 +626,16 @@ class InfoGatherer:
             except Exception as e:
                 logger.warning(f"Error in macmon monitor: {e}")
             await anyio.sleep(self.macmon_interval)
+
+    async def _monitor_nvidia_gpu(self):
+        if self.nvidia_gpu_poll_interval is None:
+            return
+        while True:
+            try:
+                with fail_after(10):
+                    metrics = await NvidiaGpuMetrics.gather()
+                    if metrics is not None:
+                        await self.info_sender.send(metrics)
+            except Exception as e:
+                logger.warning(f"Error gathering NVIDIA GPU metrics: {e}")
+            await anyio.sleep(self.nvidia_gpu_poll_interval)

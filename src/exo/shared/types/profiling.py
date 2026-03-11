@@ -109,3 +109,13 @@ class ThunderboltBridgeStatus(CamelCaseModel):
     enabled: bool
     exists: bool
     service_name: str | None = None
+
+
+class GpuInfo(CamelCaseModel):
+    """Information about a GPU device (primarily for Linux/CUDA nodes)."""
+
+    name: str
+    memory_total: Memory
+    memory_available: Memory
+    gpu_utilization: float = 0.0
+    temperature: float = 0.0

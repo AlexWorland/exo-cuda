@@ -174,8 +174,8 @@
         '';
     in
     {
-      # Python package only available on macOS (requires MLX/Metal)
-      packages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin
+      # Python package available on macOS (Metal) and Linux (CPU/CUDA)
+      packages = lib.optionalAttrs (pkgs.stdenv.hostPlatform.isDarwin || pkgs.stdenv.hostPlatform.isLinux)
         {
           exo = exoPackage;
           # Test environment for running pytest outside of Nix sandbox (needs GPU access)

@@ -117,12 +117,51 @@ async def get_network_interfaces() -> list[NetworkInterfaceInfo]:
     return interfaces_info
 
 
+async def _get_linux_gpu_info() -> tuple[str, str]:
+    """Detect NVIDIA GPU on Linux using nvidia-smi.
+
+    Returns a tuple of (model_description, gpu_name).
+    Handles nvidia-smi returning ``[N/A]`` or ``[Not Supported]`` for
+    certain fields (common on Tesla/datacenter GPUs).
+    """
+    try:
+        process = await run_process(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]
+        )
+        output = process.stdout.decode().strip()
+        if output:
+            # May have multiple GPUs; report the first one
+            first_line = output.split("\n")[0]
+            parts = first_line.split(", ")
+            gpu_name = parts[0].strip() if parts else "Unknown GPU"
+            # memory.total can be [N/A] on some GPUs
+            if len(parts) > 1:
+                raw_vram = parts[1].strip()
+                try:
+                    int(raw_vram)
+                    gpu_vram = f"{raw_vram} MiB"
+                except ValueError:
+                    gpu_vram = ""
+            else:
+                gpu_vram = ""
+            model_desc = f"Linux ({gpu_name})" if gpu_vram == "" else f"Linux ({gpu_name}, {gpu_vram})"
+            return (model_desc, gpu_name)
+    except (CalledProcessError, FileNotFoundError, OSError):
+        pass
+    return ("Linux", "CPU Only")
+
+
 async def get_model_and_chip() -> tuple[str, str]:
-    """Get Mac system information using system_profiler."""
+    """Get system information.
+
+    On macOS, uses system_profiler. On Linux, detects NVIDIA GPUs via nvidia-smi.
+    """
     model = "Unknown Model"
     chip = "Unknown Chip"
 
-    # TODO: better non mac support
+    if sys.platform == "linux":
+        return await _get_linux_gpu_info()
+
     if sys.platform != "darwin":
         return (model, chip)
 
