@@ -338,6 +338,22 @@ class NodeDiskUsage(TaggedModel):
 IS_LINUX = sys.platform == "linux"
 
 
+def _parse_nvidia_int(value: str, default: int = 0) -> int:
+    """Parse an integer from nvidia-smi output, returning default for N/A values."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _parse_nvidia_float(value: str, default: float = 0.0) -> float:
+    """Parse a float from nvidia-smi output, returning default for N/A values."""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 class NvidiaGpuMetrics(TaggedModel):
     """GPU metrics gathered from nvidia-smi on Linux."""
 
@@ -368,10 +384,10 @@ class NvidiaGpuMetrics(TaggedModel):
                     gpus.append(
                         GpuInfo(
                             name=parts[0],
-                            memory_total=Memory.from_mb(int(parts[1])),
-                            memory_available=Memory.from_mb(int(parts[2])),
-                            gpu_utilization=float(parts[3]),
-                            temperature=float(parts[4]),
+                            memory_total=Memory.from_mb(_parse_nvidia_int(parts[1])),
+                            memory_available=Memory.from_mb(_parse_nvidia_int(parts[2])),
+                            gpu_utilization=_parse_nvidia_float(parts[3]),
+                            temperature=_parse_nvidia_float(parts[4]),
                         )
                     )
             return cls(gpus=gpus) if gpus else None

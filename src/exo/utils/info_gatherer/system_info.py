@@ -121,6 +121,8 @@ async def _get_linux_gpu_info() -> tuple[str, str]:
     """Detect NVIDIA GPU on Linux using nvidia-smi.
 
     Returns a tuple of (model_description, gpu_name).
+    Handles nvidia-smi returning ``[N/A]`` or ``[Not Supported]`` for
+    certain fields (common on Tesla/datacenter GPUs).
     """
     try:
         process = await run_process(
@@ -132,7 +134,16 @@ async def _get_linux_gpu_info() -> tuple[str, str]:
             first_line = output.split("\n")[0]
             parts = first_line.split(", ")
             gpu_name = parts[0].strip() if parts else "Unknown GPU"
-            gpu_vram = f"{parts[1].strip()} MiB" if len(parts) > 1 else ""
+            # memory.total can be [N/A] on some GPUs
+            if len(parts) > 1:
+                raw_vram = parts[1].strip()
+                try:
+                    int(raw_vram)
+                    gpu_vram = f"{raw_vram} MiB"
+                except ValueError:
+                    gpu_vram = ""
+            else:
+                gpu_vram = ""
             model_desc = f"Linux ({gpu_name})" if gpu_vram == "" else f"Linux ({gpu_name}, {gpu_vram})"
             return (model_desc, gpu_name)
     except (CalledProcessError, FileNotFoundError, OSError):
