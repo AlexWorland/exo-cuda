@@ -46,11 +46,15 @@ dev = [
   "ruff>=0.11.13",
 ]
 
-# mlx[cuda] requires a newer version of mlx. the ideal on linux is: default to mlx[cpu] unless[cuda] specified.
+# CUDA support on Linux: install with `pip install exo[cuda]`
+# Note: mlx-cuda-13 must be compatible with the base mlx version.
+# The Nix build handles CUDA library linking (cublas, cudnn, nccl) automatically.
+# For non-Nix installs, ensure CUDA 13.x toolkit is available.
 [project.optional-dependencies]
-# cuda = [
-#     "mlx[cuda]==0.26.3",
-# ]
+cuda = [
+    "mlx-cuda-13==0.30.6; sys_platform == 'linux'",
+    "pynvml>=12.0.0; sys_platform == 'linux'",
+]
 
 ###
 # workspace configuration

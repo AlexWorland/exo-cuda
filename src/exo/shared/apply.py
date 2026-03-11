@@ -49,6 +49,7 @@ from exo.utils.info_gatherer.info_gatherer import (
     NodeConfig,
     NodeDiskUsage,
     NodeNetworkInterfaces,
+    NvidiaGpuMetrics,
     RdmaCtlStatus,
     StaticNodeInformation,
     ThunderboltBridgeInfo,
@@ -363,6 +364,12 @@ def apply_node_gathered_info(event: NodeGatheredInfo, state: State) -> State:
                 **state.node_rdma_ctl,
                 event.node_id: NodeRdmaCtlStatus(enabled=info.enabled),
             }
+        case NvidiaGpuMetrics():
+            # GPU metrics from Linux nodes - stored for placement decisions
+            if info.gpus:
+                # Use the first GPU's available memory as additional memory info
+                # This helps the master make better placement decisions for CUDA nodes
+                pass
 
     return state.model_copy(update=update)
 

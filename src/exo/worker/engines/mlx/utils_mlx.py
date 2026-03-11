@@ -662,27 +662,45 @@ def mlx_force_oom(size: int = 200000) -> None:
 
 def set_wired_limit_for_model(model_size: Memory):
     """
-    A context manager to temporarily change the wired limit.
+    Set the wired memory limit for a model based on available GPU memory.
+
+    On macOS (Metal), uses the Metal recommended working set size.
+    On Linux (CUDA), logs GPU memory info but does not set a wired limit
+    (CUDA manages its own memory).
 
     Note, the wired limit should not be changed during an async eval.  If an
     async eval could be running pass in the streams to synchronize with prior
     to exiting the context manager.
     """
-    if not mx.metal.is_available():
+    if mx.metal.is_available():
+        max_rec_size = Memory.from_bytes(
+            int(mx.device_info()["max_recommended_working_set_size"])
+        )
+        if model_size > 0.9 * max_rec_size:
+            logger.warning(
+                f"Generating with a model that requires {model_size.in_float_mb:.1f} MB "
+                f"which is close to the maximum recommended size of {max_rec_size.in_float_mb:.1f} "
+                "MB. This can be slow. See the documentation for possible work-arounds: "
+                "https://github.com/ml-explore/mlx-lm/tree/main#large-models"
+            )
+        mx.set_wired_limit(max_rec_size.in_bytes)
+        logger.info(f"Wired limit set to {max_rec_size}.")
         return
 
-    max_rec_size = Memory.from_bytes(
-        int(mx.device_info()["max_recommended_working_set_size"])
-    )
-    if model_size > 0.9 * max_rec_size:
-        logger.warning(
-            f"Generating with a model that requires {model_size.in_float_mb:.1f} MB "
-            f"which is close to the maximum recommended size of {max_rec_size.in_float_mb:.1f} "
-            "MB. This can be slow. See the documentation for possible work-arounds: "
-            "https://github.com/ml-explore/mlx-lm/tree/main#large-models"
-        )
-    mx.set_wired_limit(max_rec_size.in_bytes)
-    logger.info(f"Wired limit set to {max_rec_size}.")
+    # On Linux/CUDA, log available GPU memory for diagnostics
+    if sys.platform == "linux" and hasattr(mx, "cuda") and mx.cuda.is_available():
+        try:
+            device_info = mx.device_info()
+            if "memory_size" in device_info:
+                gpu_mem = Memory.from_bytes(int(device_info["memory_size"]))
+                if model_size > 0.9 * gpu_mem:
+                    logger.warning(
+                        f"Model requires {model_size.in_float_mb:.1f} MB "
+                        f"which is close to GPU memory of {gpu_mem.in_float_mb:.1f} MB"
+                    )
+                logger.info(f"CUDA GPU memory: {gpu_mem}")
+        except Exception as e:
+            logger.debug(f"Could not query CUDA device info: {e}")
 
 
 def mlx_cleanup(
