@@ -29,7 +29,7 @@ from exo.shared.types.events import (
     TaskStatusUpdated,
 )
 from exo.shared.types.memory import Memory
-from exo.shared.types.profiling import MemoryUsage, NodeNetworkInfo
+from exo.shared.types.profiling import GpuInfo, MemoryUsage, NodeNetworkInfo
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import (
     DownloadOngoing,
@@ -60,6 +60,40 @@ def add_instance_to_placements(
     return {**current_instances, command.instance.instance_id: command.instance}
 
 
+def _effective_memory(
+    node_memory: Mapping[NodeId, MemoryUsage],
+    node_gpu: Mapping[NodeId, Sequence[GpuInfo]],
+) -> Mapping[NodeId, MemoryUsage]:
+    """Return a memory mapping that uses GPU VRAM for nodes with GPUs.
+
+    On CUDA nodes the model weights reside in VRAM, so placement decisions
+    should be based on available GPU memory rather than system RAM.  For
+    nodes with multiple GPUs the available VRAM is summed.
+    """
+    if not node_gpu:
+        return node_memory
+
+    effective: dict[NodeId, MemoryUsage] = dict(node_memory)
+    for node_id, gpus in node_gpu.items():
+        if node_id not in effective or not gpus:
+            continue
+        total_vram = sum(
+            (gpu.memory_total for gpu in gpus),
+            start=Memory(),
+        )
+        available_vram = sum(
+            (gpu.memory_available for gpu in gpus),
+            start=Memory(),
+        )
+        effective[node_id] = MemoryUsage(
+            ram_total=total_vram,
+            ram_available=available_vram,
+            swap_total=Memory(),
+            swap_available=Memory(),
+        )
+    return effective
+
+
 def place_instance(
     command: PlaceInstance,
     topology: Topology,
@@ -67,7 +101,11 @@ def place_instance(
     node_memory: Mapping[NodeId, MemoryUsage],
     node_network: Mapping[NodeId, NodeNetworkInfo],
     required_nodes: set[NodeId] | None = None,
+    node_gpu: Mapping[NodeId, Sequence[GpuInfo]] | None = None,
 ) -> dict[InstanceId, Instance]:
+    # Use GPU VRAM instead of system RAM for nodes with NVIDIA GPUs
+    effective_memory = _effective_memory(node_memory, node_gpu or {})
+
     cycles = topology.get_cycles()
     candidate_cycles = list(filter(lambda it: len(it) >= command.min_nodes, cycles))
 
@@ -79,7 +117,7 @@ def place_instance(
             if required_nodes.issubset(cycle.node_ids)
         ]
     cycles_with_sufficient_memory = filter_cycles_by_memory(
-        candidate_cycles, node_memory, command.model_card.storage_size
+        candidate_cycles, effective_memory, command.model_card.storage_size
     )
     if len(cycles_with_sufficient_memory) == 0:
         raise ValueError("No cycles found with sufficient memory")
@@ -133,7 +171,7 @@ def place_instance(
     selected_cycle = max(
         cycles_with_leaf_nodes if cycles_with_leaf_nodes != [] else smallest_cycles,
         key=lambda cycle: sum(
-            (node_memory[node_id].ram_available for node_id in cycle),
+            (effective_memory[node_id].ram_available for node_id in cycle),
             start=Memory(),
         ),
     )
@@ -144,7 +182,7 @@ def place_instance(
         command.sharding = Sharding.Pipeline
 
     shard_assignments = get_shard_assignments(
-        command.model_card, selected_cycle, command.sharding, node_memory
+        command.model_card, selected_cycle, command.sharding, effective_memory
     )
 
     cycle_digraph: Topology = topology.get_subgraph_from_nodes(selected_cycle.node_ids)

@@ -236,6 +236,9 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
     node_rdma_ctl = {
         key: value for key, value in state.node_rdma_ctl.items() if key != event.node_id
     }
+    node_gpu = {
+        key: value for key, value in state.node_gpu.items() if key != event.node_id
+    }
     # Only recompute cycles if the leaving node had TB bridge enabled
     leaving_node_status = state.node_thunderbolt_bridge.get(event.node_id)
     leaving_node_had_tb_enabled = (
@@ -258,6 +261,7 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
             "node_thunderbolt": node_thunderbolt,
             "node_thunderbolt_bridge": node_thunderbolt_bridge,
             "node_rdma_ctl": node_rdma_ctl,
+            "node_gpu": node_gpu,
             "thunderbolt_bridge_cycles": thunderbolt_bridge_cycles,
         }
     )
@@ -365,11 +369,11 @@ def apply_node_gathered_info(event: NodeGatheredInfo, state: State) -> State:
                 event.node_id: NodeRdmaCtlStatus(enabled=info.enabled),
             }
         case NvidiaGpuMetrics():
-            # GPU metrics from Linux nodes - stored for placement decisions
             if info.gpus:
-                # Use the first GPU's available memory as additional memory info
-                # This helps the master make better placement decisions for CUDA nodes
-                pass
+                update["node_gpu"] = {
+                    **state.node_gpu,
+                    event.node_id: list(info.gpus),
+                }
 
     return state.model_copy(update=update)
 

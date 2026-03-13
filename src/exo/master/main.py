@@ -294,6 +294,7 @@ class Master:
                                 self.state.instances,
                                 self.state.node_memory,
                                 self.state.node_network,
+                                node_gpu=self.state.node_gpu,
                             )
                             transition_events = get_transition_events(
                                 self.state.instances, placement, self.state.tasks
